@@ -1,5 +1,5 @@
 """
-🍔 WhatsApp Bot — Дядя Стейк Шоп
+🍔 WhatsApp Bot — Дядя Стейк Бургер
 Vercel Serverless + Upstash Redis + Meta Cloud API
 """
 
@@ -29,7 +29,7 @@ except ImportError:
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="WhatsApp Bot — Дядя Стейк Шоп")
+app = FastAPI(title="WhatsApp Bot — Дядя Стейк Бургер")
 
 WA_URL = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_ID}/messages"
 WA_HEADERS = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
@@ -244,14 +244,30 @@ async def handle(phone, text):
         s["state"] = "choose_lang"
         save_session(phone, s)
         await send_buttons(phone,
-            "Сәлеметсіз бе! 👋 Добро пожаловать!\n🍔 *Дядя Стейк Шоп*\n\nТілді таңдаңыз / Выберите язык:",
+            "Сәлеметсіз бе! 👋 Добро пожаловать!\n🍔 *Дядя Стейк Бургер*\n\nТілді таңдаңыз / Выберите язык:",
             [{"id": "lang_ru", "title": "🇷🇺 Русский"}, {"id": "lang_kz", "title": "🇰🇿 Қазақша"}]
         )
+        return
+
+    # === КНОПКИ НАЗАД ===
+    if text == "back_main":
+        await show_main(phone, s)
+        return
+    if text == "back_categories":
+        await show_categories(phone, s)
         return
 
     # === ВЫБОР КАТЕГОРИИ (до главного меню!) ===
     if text.startswith("cat_"):
         cat_id = text[4:]
+        # Стейки — особая обработка, показываем контакт
+        if cat_id == "steaks":
+            await send_buttons(phone, t("steaks_contact", lang), [
+                {"id": "back_categories", "title": "🔙 " + ("Назад" if lang == "ru" else "Артқа")},
+            ])
+            s["state"] = "main"
+            save_session(phone, s)
+            return
         await show_items(phone, s, cat_id)
         return
 
@@ -301,8 +317,14 @@ async def handle(phone, text):
             save_session(phone, s)
             msg = t("added", lang).format(name=name, qty=qty, total=f"{total:,}")
             min_ok = total >= BIZ["min_order"]
-            buttons = [{"id": "btn_menu", "title": "📋" + (" Меню" if lang == "ru" else " Мәзір")}]
-            buttons.append({"id": "btn_cart", "title": "🛒" + (" Корзина" if lang == "ru" else " Себет")})
+            if lang == "ru":
+                msg += "\n\nВыберите ещё что-нибудь или перейдите в корзину 👇"
+            else:
+                msg += "\n\nТағы бірдеңе таңдаңыз немесе себетке өтіңіз 👇"
+            buttons = [
+                {"id": "btn_menu", "title": "📋" + (" Ещё" if lang == "ru" else " Тағы")},
+                {"id": "btn_cart", "title": "🛒" + (" Корзина" if lang == "ru" else " Себет")},
+            ]
             if min_ok:
                 buttons.append({"id": "checkout", "title": "✅" + (" Оформить" if lang == "ru" else " Тапсырыс")})
             await send_buttons(phone, msg, buttons)
@@ -452,14 +474,17 @@ async def show_categories(phone, s):
     lang = s.get("lang", "ru")
     s["state"] = "main"
     save_session(phone, s)
-    sections = [{
-        "title": "📋 " + ("Меню" if lang == "ru" else "Мәзір"),
-        "rows": [
-            {"id": f"cat_{c['id']}", "title": c[lang][:24],
-             "description": f"{len([i for i in MENU_ITEMS if i['cat']==c['id']])} " + ("позиций" if lang == "ru" else "тағам")}
-            for c in CATEGORIES
-        ]
-    }]
+    rows = []
+    for c in CATEGORIES:
+        count = len([i for i in MENU_ITEMS if i['cat'] == c['id']])
+        if c['id'] == 'steaks':
+            desc = "Свяжитесь с нами" if lang == "ru" else "Бізбен байланысыңыз"
+        else:
+            desc = f"{count} " + ("позиций" if lang == "ru" else "тағам")
+        rows.append({"id": f"cat_{c['id']}", "title": c[lang][:24], "description": desc})
+    # Добавляем "Назад" в конец
+    rows.append({"id": "back_main", "title": "🔙 " + ("Назад" if lang == "ru" else "Артқа")})
+    sections = [{"title": "📋 " + ("Меню" if lang == "ru" else "Мәзір"), "rows": rows}]
     btn = "Открыть меню" if lang == "ru" else "Мәзірді ашу"
     await send_list(phone, t("choose_category", lang), btn, sections)
 
@@ -480,6 +505,8 @@ async def show_items(phone, s, cat_id):
             "title": f"{name}"[:24],
             "description": f"{price_str} тг"[:72],
         })
+    # Кнопка назад к категориям
+    rows.append({"id": "back_categories", "title": "🔙 " + ("Назад к меню" if lang == "ru" else "Мәзірге қайту")})
 
     sections = [{"title": cat_name[:24], "rows": rows}]
     btn = "Выбрать" if lang == "ru" else "Таңдау"
@@ -524,6 +551,8 @@ async def show_item_variants(phone, s, item_id):
                 "title": f"{v_name}"[:24],
                 "description": f"{v['price']:,} тг"[:72],
             })
+        # Кнопка назад к категории
+        rows.append({"id": f"cat_{item['cat']}", "title": "🔙 " + ("Назад" if lang == "ru" else "Артқа")})
         sections = [{"title": name[:24], "rows": rows}]
         btn = "Выбрать" if lang == "ru" else "Таңдау"
         await send_list(phone, text, btn, sections)
@@ -630,9 +659,9 @@ async def webhook(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "bot": "Дядя Стейк Шоп WhatsApp Bot", "redis": redis is not None}
+    return {"status": "ok", "bot": "Дядя Стейк Бургер WhatsApp Bot", "redis": redis is not None}
 
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "🍔 Дядя Стейк Шоп WhatsApp Bot is running!"}
+    return {"status": "ok", "message": "🍔 Дядя Стейк Бургер WhatsApp Bot is running!"}
