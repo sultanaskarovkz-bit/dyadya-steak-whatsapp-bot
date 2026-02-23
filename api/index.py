@@ -302,6 +302,7 @@ async def handle(phone, text):
             msg = t("added", lang).format(name=name, qty=qty, total=f"{total:,}")
             min_ok = total >= BIZ["min_order"]
             buttons = [{"id": "btn_menu", "title": "📋" + (" Меню" if lang == "ru" else " Мәзір")}]
+            buttons.append({"id": "btn_cart", "title": "🛒" + (" Корзина" if lang == "ru" else " Себет")})
             if min_ok:
                 buttons.append({"id": "checkout", "title": "✅" + (" Оформить" if lang == "ru" else " Тапсырыс")})
             await send_buttons(phone, msg, buttons)
