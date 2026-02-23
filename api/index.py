@@ -63,6 +63,7 @@ def new_session(phone):
     return {
         "phone": phone, "lang": "ru", "state": "new", "cart": [],
         "sel_item": None, "sel_variant": None, "order": {},
+        "last_cat": "",
         "last_activity": datetime.now().isoformat(),
     }
 
@@ -255,6 +256,33 @@ async def handle(phone, text):
         return
     if text == "back_categories":
         await show_categories(phone, s)
+        return
+
+    # === БЫСТРОЕ ДОБАВЛЕНИЕ (1 тап = 1 шт) ===
+    if text.startswith("add_"):
+        vid = text[4:]
+        add_to_cart(s, vid, 1)
+        v = VARIANTS_BY_ID.get(vid)
+        item = ITEMS_BY_ID.get(v["item_id"]) if v else None
+        name = item.get(f"{lang}_name", item["ru_name"]) if item else ""
+        total = cart_total(s)
+        min_ok = total >= BIZ["min_order"]
+        last_cat = s.get("last_cat", "")
+
+        msg = t("added", lang).format(name=name, qty=1, total=f"{total:,}")
+
+        buttons = []
+        if last_cat:
+            cat = next((c for c in CATEGORIES if c["id"] == last_cat), None)
+            cat_label = cat[lang][:16] if cat else "Меню"
+            buttons.append({"id": f"cat_{last_cat}", "title": f"➕ {cat_label}"[:20]})
+        buttons.append({"id": "btn_cart", "title": "🛒" + (" Корзина" if lang == "ru" else " Себет")})
+        if min_ok:
+            buttons.append({"id": "checkout", "title": "✅" + (" Оформить" if lang == "ru" else " Тапсырыс")})
+
+        s["state"] = "main"
+        save_session(phone, s)
+        await send_buttons(phone, msg, buttons[:3])
         return
 
     # === ВЫБОР КАТЕГОРИИ (до главного меню!) ===
@@ -498,20 +526,25 @@ async def show_items(phone, s, cat_id):
     rows = []
     for item in items:
         name = item.get(f"{lang}_name", item["ru_name"])
-        prices = [v["price"] for v in item["variants"]]
-        price_str = f"{min(prices):,}" if min(prices) == max(prices) else f"от {min(prices):,}"
-        rows.append({
-            "id": f"item_{item['id']}",
-            "title": f"{name}"[:24],
-            "description": f"{price_str} тг"[:72],
-        })
-    # Кнопка назад к категориям
+        for v in item["variants"]:
+            v_name = v.get(lang, v["ru"])
+            if len(item["variants"]) == 1:
+                label = f"{name}"
+            else:
+                label = f"{name} {v_name}"
+            rows.append({
+                "id": f"add_{v['id']}",
+                "title": label[:24],
+                "description": f"{v['price']:,} тг"[:72],
+            })
+    # Кнопка назад
     rows.append({"id": "back_categories", "title": "🔙 " + ("Назад к меню" if lang == "ru" else "Мәзірге қайту")})
 
     sections = [{"title": cat_name[:24], "rows": rows}]
     btn = "Выбрать" if lang == "ru" else "Таңдау"
-    await send_list(phone, f"*{cat_name}*", btn, sections)
+    await send_list(phone, f"*{cat_name}*\n" + ("Нажмите — сразу добавится 1 шт" if lang == "ru" else "Басыңыз — бірден 1 дана қосылады"), btn, sections)
     s["state"] = "browse"
+    s["last_cat"] = cat_id
     save_session(phone, s)
 
 
