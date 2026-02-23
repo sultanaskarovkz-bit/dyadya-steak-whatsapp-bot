@@ -249,32 +249,7 @@ async def handle(phone, text):
         )
         return
 
-    # === ГЛАВНОЕ МЕНЮ ===
-    if txt in ["меню", "мәзір", "menu"] or text == "btn_menu" or state == "main":
-        if text == "btn_faq":
-            await show_faq(phone, s)
-            return
-        if text == "btn_contacts":
-            await send_text(phone, t("contacts", lang))
-            s["state"] = "main"
-            save_session(phone, s)
-            return
-        if text == "btn_cart" or txt in ["корзина", "себет", "cart"]:
-            await show_cart(phone, s)
-            return
-        await show_categories(phone, s)
-        return
-
-    # === FAQ ===
-    if text.startswith("faq_"):
-        key = text
-        if key in ["faq_hours", "faq_delivery", "faq_payment"]:
-            await send_text(phone, t(key, lang))
-        s["state"] = "main"
-        save_session(phone, s)
-        return
-
-    # === ВЫБОР КАТЕГОРИИ ===
+    # === ВЫБОР КАТЕГОРИИ (до главного меню!) ===
     if text.startswith("cat_"):
         cat_id = text[4:]
         await show_items(phone, s, cat_id)
@@ -300,6 +275,15 @@ async def handle(phone, text):
             {"id": "qty_2", "title": "2 шт"},
             {"id": "qty_3", "title": "3 шт"},
         ])
+        return
+
+    # === FAQ ===
+    if text.startswith("faq_"):
+        key = text
+        if key in ["faq_hours", "faq_delivery", "faq_payment"]:
+            await send_text(phone, t(key, lang))
+        s["state"] = "main"
+        save_session(phone, s)
         return
 
     # === КОЛИЧЕСТВО ===
@@ -425,6 +409,21 @@ async def handle(phone, text):
             save_session(phone, s)
             await send_text(phone, t("order_cancel", lang))
             return
+
+    # === ГЛАВНОЕ МЕНЮ (после всех конкретных обработчиков) ===
+    if txt in ["меню", "мәзір", "menu"] or text == "btn_menu":
+        await show_categories(phone, s)
+        return
+
+    if text == "btn_faq":
+        await show_faq(phone, s)
+        return
+
+    if text == "btn_contacts":
+        await send_text(phone, t("contacts", lang))
+        s["state"] = "main"
+        save_session(phone, s)
+        return
 
     # === ПО УМОЛЧАНИЮ ===
     await show_main(phone, s)
