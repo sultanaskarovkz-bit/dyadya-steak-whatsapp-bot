@@ -5,6 +5,7 @@
 
 import os
 import re
+import json
 import logging
 import httpx
 from datetime import datetime
@@ -198,7 +199,7 @@ async def send_order_to_crm(session_data: dict) -> dict:
     if not isinstance(order_info, dict):
         order_info = {}
     
-    logger.info(f"CRM debug: cart type={type(cart)}, order type={type(order_info)}, cart={str(cart)[:300]}")
+    logger.warning(f"CRM debug: cart type={type(cart)}, order type={type(order_info)}, cart={str(cart)[:300]}")
     
     nomenclatures = build_nomenclatures(cart)
     if not nomenclatures:
@@ -257,6 +258,8 @@ async def send_order_to_crm(session_data: dict) -> dict:
         "Content-Type": "application/json",
     }
     
+    logger.warning(f"CRM PAYLOAD: {json.dumps(payload, ensure_ascii=False, default=str)[:1000]}")
+    
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(
@@ -266,13 +269,20 @@ async def send_order_to_crm(session_data: dict) -> dict:
             )
             
             data = resp.json()
+            if isinstance(data, list):
+                data = {"success": False, "message": str(data)}
             logger.info(f"CRM response {resp.status_code}: {str(data)[:500]}")
             
             if resp.status_code in (200, 201) and data.get("success"):
                 order_data = data.get("data", {})
-                if isinstance(order_data, dict) and "data" in order_data:
-                    order_data = order_data["data"]
-                order_id = order_data.get("id", 0)
+                order_id = 0
+                if isinstance(order_data, dict):
+                    if "data" in order_data and isinstance(order_data["data"], dict):
+                        order_id = order_data["data"].get("id", 0)
+                    else:
+                        order_id = order_data.get("id", 0)
+                logger.info(f"CRM: заказ создан #{order_id}")
+                return {"success": True, "order_id": order_id}
                 logger.info(f"CRM: заказ создан #{order_id}")
                 return {"success": True, "order_id": order_id}
             else:
@@ -281,5 +291,6 @@ async def send_order_to_crm(session_data: dict) -> dict:
                 return {"success": False, "error": error_msg, "status": resp.status_code}
                 
     except Exception as e:
-        logger.error(f"CRM: исключение: {e}")
+        import traceback
+        logger.error(f"CRM: исключение: {e}\n{traceback.format_exc()}")
         return {"success": False, "error": str(e)}
