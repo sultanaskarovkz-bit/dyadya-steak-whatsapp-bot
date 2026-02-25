@@ -8,9 +8,11 @@ import re
 import json
 import logging
 import httpx
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
+
+ASTANA_TZ = timezone(timedelta(hours=5))
 
 # ==========================================
 # ⚙️  НАСТРОЙКИ CRM
@@ -227,7 +229,7 @@ async def send_order_to_crm(session_data: dict) -> dict:
     
     payload = {
         "uuid": str(uuid_mod.uuid4()),
-        "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "date": datetime.now(ASTANA_TZ).strftime("%Y-%m-%d %H:%M"),
         "comment": comment,
         "is_fiscal": False,
         "organization_id": CRM_ORGANIZATION_ID,
