@@ -142,6 +142,9 @@ def build_nomenclatures(cart: list) -> list:
     """Превращает корзину бота в массив nomenclatures для CRM"""
     noms = []
     for item in cart:
+        if not isinstance(item, dict):
+            logger.warning(f"CRM: cart item is not dict: {type(item)} = {item}")
+            continue
         vid = item.get("vid", "")
         mapping = CRM_PRODUCT_MAP.get(vid)
         if not mapping:
@@ -186,14 +189,22 @@ async def send_order_to_crm(session_data: dict) -> dict:
         logger.warning("CRM: токен не задан, пропускаем")
         return {"success": False, "error": "CRM_TOKEN not set"}
     
+    if not isinstance(session_data, dict):
+        logger.error(f"CRM: session_data is {type(session_data)}, not dict")
+        return {"success": False, "error": "Invalid session data"}
+    
     cart = session_data.get("cart", [])
     order_info = session_data.get("order", {})
+    if not isinstance(order_info, dict):
+        order_info = {}
+    
+    logger.info(f"CRM debug: cart type={type(cart)}, order type={type(order_info)}, cart={str(cart)[:300]}")
     
     nomenclatures = build_nomenclatures(cart)
     if not nomenclatures:
         return {"success": False, "error": "Нет товаров для CRM"}
     
-    total = sum(i["price"] * i["qty"] for i in cart)
+    total = sum(i.get("price", 0) * i.get("qty", 1) for i in cart if isinstance(i, dict))
     
     phone = order_info.get("phone") or session_data.get("phone", "")
     phone = normalize_phone(phone)
