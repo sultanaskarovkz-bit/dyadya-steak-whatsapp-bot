@@ -1,6 +1,7 @@
 """
 🍔 WhatsApp Bot — Дядя Стейк Бургер
 Vercel Serverless + Upstash Redis + Meta Cloud API
+С поддержкой текстовых заказов
 """
 
 import logging
@@ -17,6 +18,7 @@ try:
         TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
         UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN,
         BIZ, CATEGORIES, MENU_ITEMS, ITEMS_BY_ID, VARIANTS_BY_ID, t,
+        parse_text_order,
     )
 except ImportError:
     from config import (
@@ -24,6 +26,7 @@ except ImportError:
         TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
         UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN,
         BIZ, CATEGORIES, MENU_ITEMS, ITEMS_BY_ID, VARIANTS_BY_ID, t,
+        parse_text_order,
     )
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
@@ -63,7 +66,7 @@ def new_session(phone):
     return {
         "phone": phone, "lang": "ru", "state": "new", "cart": [],
         "sel_item": None, "sel_variant": None, "order": {},
-        "last_cat": "",
+        "last_cat": "", "pending_text_order": [],
         "last_activity": datetime.now().isoformat(),
     }
 
@@ -93,7 +96,6 @@ def save_order(s):
                 "created_at": datetime.now().isoformat(),
             }
             redis.set(f"order:{oid}", json.dumps(order, ensure_ascii=False), ex=86400 * 7)
-            # Добавляем в список заказов
             redis.lpush("orders:list", str(oid))
         except Exception as e:
             logger.error(f"Redis order save error: {e}")
@@ -215,6 +217,7 @@ async def handle(phone, text):
     # === ГЛОБАЛЬНЫЕ КОМАНДЫ ===
     if txt in ["стоп", "отмена", "stop", "бас тарту"]:
         s = new_session(phone)
+        s["lang"] = lang  # сохраняем язык
         save_session(phone, s)
         await send_text(phone, "❌ Отменено. Напишите *меню* / *мәзір*")
         return
@@ -274,21 +277,58 @@ async def handle(phone, text):
         buttons = []
         if last_cat:
             cat = next((c for c in CATEGORIES if c["id"] == last_cat), None)
-            cat_label = cat[lang][:16] if cat else "Меню"
+            cat_label = cat[lang][:14] if cat else "Меню"
             buttons.append({"id": f"cat_{last_cat}", "title": f"➕ {cat_label}"[:20]})
-        buttons.append({"id": "btn_cart", "title": "🛒" + (" Корзина" if lang == "ru" else " Себет")})
         if min_ok:
+            buttons.append({"id": "btn_cart", "title": "🛒" + (" Корзина" if lang == "ru" else " Себет")})
             buttons.append({"id": "checkout", "title": "✅" + (" Оформить" if lang == "ru" else " Тапсырыс")})
+        else:
+            buttons.append({"id": "btn_menu", "title": "📋" + (" Другое" if lang == "ru" else " Басқа")})
+            buttons.append({"id": "btn_cart", "title": "🛒" + (" Корзина" if lang == "ru" else " Себет")})
 
         s["state"] = "main"
         save_session(phone, s)
         await send_buttons(phone, msg, buttons[:3])
         return
 
-    # === ВЫБОР КАТЕГОРИИ (до главного меню!) ===
+    # === ПОДТВЕРЖДЕНИЕ ТЕКСТОВОГО ЗАКАЗА ===
+    if text == "toc_yes":
+        pending = s.get("pending_text_order", [])
+        if pending:
+            for vid, qty in pending:
+                add_to_cart(s, vid, qty)
+            s["pending_text_order"] = []
+            total = cart_total(s)
+            min_ok = total >= BIZ["min_order"]
+            s["state"] = "main"
+            save_session(phone, s)
+
+            msg = f"✅ Добавлено в корзину!\n\n🛒 Итого: *{total:,} тг*" if lang == "ru" else f"✅ Себетке қосылды!\n\n🛒 Барлығы: *{total:,} тг*"
+
+            buttons = []
+            if min_ok:
+                buttons.append({"id": "checkout", "title": "✅" + (" Оформить" if lang == "ru" else " Тапсырыс")})
+                buttons.append({"id": "btn_menu", "title": "➕" + (" Ещё" if lang == "ru" else " Тағы")})
+                buttons.append({"id": "btn_cart", "title": "🛒" + (" Корзина" if lang == "ru" else " Себет")})
+            else:
+                buttons.append({"id": "btn_menu", "title": "📋" + (" Ещё" if lang == "ru" else " Тағы")})
+                buttons.append({"id": "btn_cart", "title": "🛒" + (" Корзина" if lang == "ru" else " Себет")})
+            await send_buttons(phone, msg, buttons[:3])
+        return
+
+    if text == "toc_no":
+        s["pending_text_order"] = []
+        s["state"] = "main"
+        save_session(phone, s)
+        cancel_msg = "❌ Отменено. Попробуйте снова или откройте *меню* 📋" if lang == "ru" else "❌ Бас тартылды. Қайтадан жазыңыз немесе *мәзір* ашыңыз 📋"
+        await send_buttons(phone, cancel_msg, [
+            {"id": "btn_menu", "title": "📋" + (" Меню" if lang == "ru" else " Мәзір")},
+        ])
+        return
+
+    # === ВЫБОР КАТЕГОРИИ ===
     if text.startswith("cat_"):
         cat_id = text[4:]
-        # Стейки — особая обработка, показываем контакт
         if cat_id == "steaks":
             await send_buttons(phone, t("steaks_contact", lang), [
                 {"id": "back_categories", "title": "🔙 " + ("Назад" if lang == "ru" else "Артқа")},
@@ -299,13 +339,12 @@ async def handle(phone, text):
         await show_items(phone, s, cat_id)
         return
 
-    # === ВЫБОР ПОЗИЦИИ ===
+    # === ВЫБОР ПОЗИЦИИ (старый flow, если нужен) ===
     if text.startswith("item_"):
         item_id = text[5:]
         await show_item_variants(phone, s, item_id)
         return
 
-    # === ВЫБОР ВАРИАНТА ===
     if text.startswith("var_"):
         vid = text[4:]
         s["sel_variant"] = vid
@@ -345,10 +384,6 @@ async def handle(phone, text):
             save_session(phone, s)
             msg = t("added", lang).format(name=name, qty=qty, total=f"{total:,}")
             min_ok = total >= BIZ["min_order"]
-            if lang == "ru":
-                msg += "\n\nВыберите ещё что-нибудь или перейдите в корзину 👇"
-            else:
-                msg += "\n\nТағы бірдеңе таңдаңыз немесе себетке өтіңіз 👇"
             buttons = [
                 {"id": "btn_menu", "title": "📋" + (" Ещё" if lang == "ru" else " Тағы")},
                 {"id": "btn_cart", "title": "🛒" + (" Корзина" if lang == "ru" else " Себет")},
@@ -461,7 +496,7 @@ async def handle(phone, text):
             await send_text(phone, t("order_cancel", lang))
             return
 
-    # === ГЛАВНОЕ МЕНЮ (после всех конкретных обработчиков) ===
+    # === ГЛАВНОЕ МЕНЮ ===
     if txt in ["меню", "мәзір", "menu"] or text == "btn_menu":
         await show_categories(phone, s)
         return
@@ -475,6 +510,45 @@ async def handle(phone, text):
         s["state"] = "main"
         save_session(phone, s)
         return
+
+    # === 💬 ТЕКСТОВЫЙ ЗАКАЗ (перед default!) ===
+    if state in ["main", "browse"] and len(txt) >= 3:
+        parsed = parse_text_order(text)
+        if parsed:
+            logger.info(f"📝 Text order parsed: {parsed}")
+            # Формируем подтверждение
+            lines = []
+            total = 0
+            for vid, qty in parsed:
+                v = VARIANTS_BY_ID.get(vid)
+                if not v:
+                    continue
+                item = ITEMS_BY_ID.get(v["item_id"])
+                name = item.get(f"{lang}_name", item["ru_name"]) if item else ""
+                var_name = v.get(lang, v["ru"])
+                price = v["price"] * qty
+                total += price
+                if len(item.get("variants", [])) > 1:
+                    lines.append(f"• {name} ({var_name}) x{qty} — {price:,} тг")
+                else:
+                    lines.append(f"• {name} x{qty} — {price:,} тг")
+
+            items_text = "\n".join(lines)
+            msg = t("text_order_confirm", lang).format(items=items_text, total=f"{total:,}")
+
+            s["pending_text_order"] = parsed
+            s["state"] = "main"
+            save_session(phone, s)
+
+            yes_label = "✅ Да, добавить" if lang == "ru" else "✅ Иә, қосу"
+            no_label = "❌ Нет" if lang == "ru" else "❌ Жоқ"
+            menu_label = "📋 Меню" if lang == "ru" else "📋 Мәзір"
+            await send_buttons(phone, msg, [
+                {"id": "toc_yes", "title": yes_label[:20]},
+                {"id": "toc_no", "title": no_label[:20]},
+                {"id": "btn_menu", "title": menu_label},
+            ])
+            return
 
     # === ПО УМОЛЧАНИЮ ===
     await show_main(phone, s)
@@ -510,7 +584,6 @@ async def show_categories(phone, s):
         else:
             desc = f"{count} " + ("позиций" if lang == "ru" else "тағам")
         rows.append({"id": f"cat_{c['id']}", "title": c[lang][:24], "description": desc})
-    # Добавляем "Назад" в конец
     rows.append({"id": "back_main", "title": "🔙 " + ("Назад" if lang == "ru" else "Артқа")})
     sections = [{"title": "📋 " + ("Меню" if lang == "ru" else "Мәзір"), "rows": rows}]
     btn = "Открыть меню" if lang == "ru" else "Мәзірді ашу"
@@ -537,12 +610,11 @@ async def show_items(phone, s, cat_id):
                 "title": label[:24],
                 "description": f"{v['price']:,} тг"[:72],
             })
-    # Кнопка назад
     rows.append({"id": "back_categories", "title": "🔙 " + ("Назад к меню" if lang == "ru" else "Мәзірге қайту")})
 
     sections = [{"title": cat_name[:24], "rows": rows}]
     btn = "Выбрать" if lang == "ru" else "Таңдау"
-    await send_list(phone, f"*{cat_name}*\n" + ("Нажмите — сразу добавится 1 шт" if lang == "ru" else "Басыңыз — бірден 1 дана қосылады"), btn, sections)
+    await send_list(phone, f"*{cat_name}*\n" + ("👆 Нажмите — добавится 1 шт" if lang == "ru" else "👆 Басыңыз — 1 дана қосылады"), btn, sections)
     s["state"] = "browse"
     s["last_cat"] = cat_id
     save_session(phone, s)
@@ -584,7 +656,6 @@ async def show_item_variants(phone, s, item_id):
                 "title": f"{v_name}"[:24],
                 "description": f"{v['price']:,} тг"[:72],
             })
-        # Кнопка назад к категории
         rows.append({"id": f"cat_{item['cat']}", "title": "🔙 " + ("Назад" if lang == "ru" else "Артқа")})
         sections = [{"title": name[:24], "rows": rows}]
         btn = "Выбрать" if lang == "ru" else "Таңдау"
