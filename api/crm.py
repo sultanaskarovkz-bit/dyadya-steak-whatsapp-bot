@@ -115,6 +115,7 @@ def build_nomenclatures(cart: list) -> list:
             "amount": item.get("qty", 1) * 1000,
             "category_id": mapping["cat"],
             "title": mapping["title"],
+            "promotional": False,
         })
     return noms
 
@@ -125,6 +126,7 @@ def build_payment(payment_method: str, total_tenge: int) -> list:
     return [{
         "id": pay_info["id"],
         "sum": total_tenge * 100,   # тиын
+        "payment_type": pay_info["payment_type"],
     }]
 
 
@@ -171,15 +173,20 @@ async def send_order_to_crm(session_data: dict) -> dict:
         comment_parts.append(f"📍 {address}")
     comment = " | ".join(comment_parts)
     
+    import uuid as uuid_mod
+    
     payload = {
+        "uuid": str(uuid_mod.uuid4()),
         "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "comment": comment,
+        "is_fiscal": False,
         "organization_id": CRM_ORGANIZATION_ID,
         "trade_point_id": CRM_TRADE_POINT_ID,
         "sales_channel_id": CRM_SALES_CHANNEL_ID,
+        "order_tags": [],
         "payments": payments,
         "nomenclatures": nomenclatures,
-        "order_details": {
+        "details": {
             "phone": phone,
             "client_name": order_info.get("name", "WhatsApp клиент"),
             "street": address,
@@ -188,6 +195,10 @@ async def send_order_to_crm(session_data: dict) -> dict:
             "floor": None,
             "room": None,
             "city_id": CRM_CITY_ID,
+            "coordinates": {
+                "latitude": None,
+                "longitude": None,
+            },
         },
     }
     
