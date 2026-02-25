@@ -32,6 +32,11 @@ except ImportError:
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+try:
+    from .crm import send_order_to_crm
+except ImportError:
+    from crm import send_order_to_crm
+
 app = FastAPI(title="WhatsApp Bot — Дядя Стейк Бургер")
 
 WA_URL = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_ID}/messages"
@@ -480,6 +485,15 @@ async def handle(phone, text):
     if state == "confirm":
         if text == "confirm_yes":
             oid = save_order(s)
+            # Отправляем в CRM
+            try:
+                crm_result = await send_order_to_crm(s)
+                if crm_result.get("success"):
+                    logger.info(f"CRM: заказ #{oid} → CRM ID={crm_result.get('order_id')}")
+                else:
+                    logger.warning(f"CRM: заказ #{oid} не отправлен: {crm_result.get('error')}")
+            except Exception as e:
+                logger.error(f"CRM error for #{oid}: {e}")
             msg = t("order_done", lang).format(id=oid, time=BIZ["delivery_time"])
             await send_text(phone, msg)
             await notify_telegram(oid, s)
