@@ -101,6 +101,43 @@ def normalize_phone(phone: str) -> str:
     return f"+{digits}"
 
 
+def parse_address(address: str) -> dict:
+    """Парсит адрес: 'Мангилик ел 24, кв 90' → street, building, room"""
+    result = {"street": None, "building": None, "entrance": None, "floor": None, "room": None}
+    if not address:
+        return result
+    
+    # Ищем кв/квартира
+    kv_match = re.search(r'(?:кв\.?|квартира)\s*(\d+)', address, re.IGNORECASE)
+    if kv_match:
+        result["room"] = kv_match.group(1)
+    
+    # Ищем подъезд
+    pod_match = re.search(r'(?:подъезд|подьезд|под\.?)\s*(\d+)', address, re.IGNORECASE)
+    if pod_match:
+        result["entrance"] = pod_match.group(1)
+    
+    # Ищем этаж
+    floor_match = re.search(r'(?:этаж|эт\.?)\s*(\d+)', address, re.IGNORECASE)
+    if floor_match:
+        result["floor"] = floor_match.group(1)
+    
+    # Убираем кв/подъезд/этаж из строки чтобы найти улицу и дом
+    clean = re.sub(r'(?:кв\.?|квартира|подъезд|подьезд|под\.?|этаж|эт\.?)\s*\d+', '', address, flags=re.IGNORECASE)
+    clean = re.sub(r'[,\s]+$', '', clean).strip()
+    
+    # Ищем номер дома (последнее число в оставшейся строке)
+    parts = re.match(r'^(.+?)\s+(\d+\S*)\s*$', clean)
+    if parts:
+        result["street"] = parts.group(1).strip()
+        result["building"] = parts.group(2).strip()
+    else:
+        result["street"] = clean
+        result["building"] = "1"
+    
+    return result
+
+
 def build_nomenclatures(cart: list) -> list:
     """Превращает корзину бота в массив nomenclatures для CRM"""
     noms = []
@@ -162,6 +199,7 @@ async def send_order_to_crm(session_data: dict) -> dict:
     phone = normalize_phone(phone)
     
     address = order_info.get("address", "")
+    addr = parse_address(address)
     payment_method = order_info.get("payment", "Нал")
     payments = build_payment(payment_method, total)
     
@@ -189,11 +227,11 @@ async def send_order_to_crm(session_data: dict) -> dict:
         "details": {
             "phone": phone,
             "client_name": order_info.get("name", "WhatsApp клиент"),
-            "street": address,
-            "building": None,
-            "entrance": None,
-            "floor": None,
-            "room": None,
+            "street": addr["street"],
+            "building": addr["building"],
+            "entrance": addr["entrance"],
+            "floor": addr["floor"],
+            "room": addr["room"],
             "city_id": CRM_CITY_ID,
             "coordinates": {
                 "latitude": None,
