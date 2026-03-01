@@ -751,9 +751,42 @@ async def webhook(request: Request):
 
         for entry in body.get("entry", []):
             for change in entry.get("changes", []):
-                for msg in change.get("value", {}).get("messages", []):
+                value = change.get("value", {})
+                
+                # Extract contact name if available
+                contact_name = ""
+                for contact in value.get("contacts", []):
+                    profile = contact.get("profile", {})
+                    contact_name = profile.get("name", "")
+                
+                for msg in value.get("messages", []):
                     phone = msg.get("from")
                     msg_type = msg.get("type")
+
+                    # Save contact to database
+                    if phone and redis:
+                        try:
+                            now = datetime.now(tz=None).isoformat()
+                            key = f"contact:{phone}"
+                            existing = redis.get(key)
+                            if existing:
+                                data = json.loads(existing)
+                                data["last_seen"] = now
+                                data["msg_count"] = data.get("msg_count", 0) + 1
+                                if contact_name and not data.get("name"):
+                                    data["name"] = contact_name
+                            else:
+                                data = {
+                                    "phone": phone,
+                                    "name": contact_name,
+                                    "first_seen": now,
+                                    "last_seen": now,
+                                    "msg_count": 1,
+                                }
+                            redis.set(key, json.dumps(data, ensure_ascii=False), ex=86400*365)
+                            redis.sadd("contacts:all", phone)
+                        except Exception as ce:
+                            logger.warning(f"Contact save error: {ce}")
 
                     text = ""
                     if msg_type == "text":
@@ -773,6 +806,28 @@ async def webhook(request: Request):
     except Exception as e:
         logger.error(f"Webhook error: {e}", exc_info=True)
         return {"status": "error"}
+
+
+@app.get("/contacts")
+async def get_contacts(key: str = ""):
+    """Получить базу контактов"""
+    if key != VERIFY_TOKEN:
+        return {"error": "unauthorized"}
+    
+    if not redis:
+        return {"error": "no redis"}
+    
+    phones = redis.smembers("contacts:all")
+    contacts = []
+    for phone in sorted(phones):
+        data = redis.get(f"contact:{phone}")
+        if data:
+            contacts.append(json.loads(data))
+    
+    return {
+        "total": len(contacts),
+        "contacts": contacts,
+    }
 
 
 @app.get("/health")
