@@ -164,11 +164,12 @@ def build_nomenclatures(cart: list) -> list:
 
 
 def build_payment(payment_method: str, total_tenge: int) -> list:
-    """Строит массив payments для CRM — все заказы как Каспи"""
+    """Строит массив payments для CRM"""
+    # payment-options IDs: Нал=7, Б/нал=8, Карта=9, Онлайн=10, Каспи голд=11, Бонусы=12
     return [{
-        "id": 5,
+        "id": 11,
         "sum": total_tenge * 100,   # тиын
-        "payment_type": "kaspi",
+        "payment_type": "cashless",
     }]
 
 
