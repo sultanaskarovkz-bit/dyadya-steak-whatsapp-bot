@@ -112,11 +112,17 @@ def save_order(s):
 # ==========================================
 
 def cart_total(s):
-    return sum(i["price"] * i["qty"] for i in s.get("cart", []))
+    return sum(i["price"] * i["qty"] for i in s.get("cart", []) if i.get("qty", 0) > 0 and i.get("price", 0) > 0)
+
+
+def clean_cart(s):
+    """Убирает из корзины элементы с qty <= 0 или price <= 0"""
+    s["cart"] = [c for c in s.get("cart", []) if c.get("qty", 0) > 0 and c.get("price", 0) > 0]
 
 
 def cart_text(s):
     lang = s.get("lang", "ru")
+    clean_cart(s)
     cart = s.get("cart", [])
     if not cart:
         return t("cart_empty", lang)
@@ -130,6 +136,7 @@ def cart_text(s):
 
 
 def add_to_cart(s, variant_id, qty=1):
+    qty = max(1, qty)
     v = VARIANTS_BY_ID.get(variant_id)
     if not v:
         return
@@ -412,6 +419,7 @@ async def handle(phone, text):
 
     # === ОФОРМЛЕНИЕ ===
     if text == "checkout":
+        clean_cart(s)
         total = cart_total(s)
         if total < BIZ["min_order"]:
             min_val = f"{BIZ['min_order']:,}"
@@ -484,6 +492,7 @@ async def handle(phone, text):
 
     if state == "confirm":
         if text == "confirm_yes":
+            clean_cart(s)
             oid = save_order(s)
             # Отправляем в CRM
             try:
